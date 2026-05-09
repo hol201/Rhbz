@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Зоны поражения ЯВ</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v10.2.1/ol.css">
+  <style>
+    body { margin: 0; padding: 0; font-family: Arial, sans-serif; background: #333; }
+    #map { position: absolute; top: 0; bottom: 0; left: 0; right: 0; }
+    
+    .control-panel {
+      position: absolute; background: rgba(255,255,255,0.95); padding: 12px 15px;
+      border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.4); z-index: 1000;
+      max-width: 320px; 
+      box-sizing: border-box;
+    }
+    
+    @media (min-width: 769px) {
+      .control-panel { top: 15px; left: 15px; right: auto; bottom: auto; max-height: 85vh; overflow-y: auto; }
+    }
+
+    @media (max-width: 768px) {
+      .control-panel {
+        bottom: 0; left: 0; right: 0; top: auto;
+        width: 100%; max-width: 100%;
+        border-radius: 12px 12px 0 0;
+        max-height: 45vh;
+        overflow-y: auto;
+        background: rgba(255,255,255,0.97);
+        padding: 12px;
+        border-top: 3px solid #2a7ae2;
+      }
+      .control-panel h3 { font-size: 14px; margin-top: 0; }
+      .control-panel label { font-size: 12px; }
+      .control-panel input, .control-panel select { height: 40px; font-size: 16px; margin-bottom: 6px; }
+      .control-panel button { height: 44px; font-size: 14px; }
+      .coords-display { font-size: 12px; }
+    }
+
+    .control-panel h3 { margin: 0 0 8px; }
+    .control-panel label { display: block; margin-top: 5px; font-weight: bold; font-size: 12px; }
+    .control-panel input, .control-panel select { width: 100%; padding: 6px; box-sizing: border-box; margin-bottom: 3px; border: 1px solid #ccc; border-radius: 6px; }
+    .control-panel button { width: 100%; padding: 8px; background: #2a7ae2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 6px; touch-action: manipulation; }
+    .control-panel button:hover { background: #1b5bbf; }
+    .note { font-size: 10px; color: #555; margin-top: 8px; }
+    .coords-display { font-size: 12px; background: #f5f5f5; padding: 6px; border-radius: 6px; text-align: center; margin: 5px 0; font-weight: bold; }
+
+    .zone-tooltip {
+      position: absolute; background: rgba(0, 0, 0, 0.85); color: #fff;
+      padding: 6px 10px; border-radius: 4px; font-size: 12px;
+      pointer-events: none; white-space: normal; z-index: 2000;
+      transform: translate(-50%, -120%); box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+      max-width: 200px; text-align: center;
+    }
+    .zone-tooltip::after {
+      content: ''; position: absolute; top: 100%; left: 50%; margin-left: -6px;
+      border-width: 6px; border-style: solid;
+      border-color: rgba(0,0,0,0.85) transparent transparent transparent;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="zoneTooltip" class="zone-tooltip" style="display: none;"></div>
+
+  <div class="control-panel">
+    <h3>💥 Параметры взрыва</h3>
+    <div class="coords-display" id="coordsDisplay">Эпицентр: ...</div>
+    
+    <label for="power">Мощность (кт)</label>
+    <input type="number" id="power" value="100" min="0.1" step="any">
+    
+    <label for="burstType">Тип</label>
+    <select id="burstType">
+      <option value="ground">Наземный</option>
+      <option value="air">Воздушный</option>
+      <option value="underground">Подземный</option>
+    </select>
+
+    <label for="windSpeed">Ветер (м/с)</label>
+    <input type="number" id="windSpeed" value="5" step="0.1" min="0">
+    
+    <label for="windDeg">Направление (градусы)</label>
+    <input type="number" id="windDeg" value="270" step="1" min="0" max="360">
+
+    <button id="fetchWindBtn">🌤 Загрузить погоду</button>
+    <button id="calcBtn">✅ Рассчитать зоны</button>
+    
+    <div class="note">Кликните по карте для выбора эпицентра.</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/ol@v10.2.1/dist/ol.min.js"></script>
+  <script>
+    // =============================================
+    // 1. КАРТА И СЛОИ (только OSM)
+    // =============================================
+    const tileLayer = new ol.layer.Tile({
+      source: new ol.source.OSM()
+    });
+
+    const map = new ol.Map({
+      target: 'map',
+      layers: [tileLayer],
+      view: new ol.View({ center: ol.proj.fromLonLat([37.618423, 55.751244]), zoom: 7 })
+    });
+
+    const vectorSource = new ol.source.Vector();
+    const vectorLayer = new ol.layer.Vector({ 
+      source: vectorSource, 
+      style: f => f.get('style') 
+    });
+    map.addLayer(vectorLayer);
+
+    // =============================================
+    // 2. ТУЛТИП С ПРИОРИТЕТОМ МАЛЫХ (БЛИЗКИХ) ЗОН
+    // =============================================
+    const tooltip = document.getElementById('zoneTooltip');
+    const overlay = new ol.Overlay({ element: tooltip, offset: [0, -10], positioning: 'bottom-center' });
+    map.addOverlay(overlay);
+
+    map.on('pointermove', evt => {
+      const features = map.getFeaturesAtPixel(evt.pixel, { hitTolerance: 5 });
+      let bestFeature = null;
+      let minSize = Infinity;
+
+      if (features && features.length) {
+        features.forEach(f => {
+          const geom = f.getGeometry();
+          let size = Infinity;
+          if (geom.getType() === 'Circle') {
+            size = geom.getRadius();
+          } else if (geom.getType() === 'Polygon') {
+            size = f.get('L') || Infinity;
+          }
+          if (size < minSize) {
+            minSize = size;
+            bestFeature = f;
+          }
+        });
+      }
+
+      if (bestFeature && bestFeature.get('label')) {
+        overlay.setPosition(evt.coordinate);
+        tooltip.style.display = 'block';
+        tooltip.innerHTML = bestFeature.get('label');
+      } else {
+        tooltip.style.display = 'none';
+      }
+    });
+
+    // =============================================
+    // 3. ГЕОДЕЗИЧЕСКИЕ И РАСЧЕТЫ
+    // =============================================
+    function destination(lat1, lon1, d, brng) {
+      const R = 6371, φ1 = lat1 * Math.PI / 180, λ1 = lon1 * Math.PI / 180, θ = brng * Math.PI / 180;
+      const φ2 = Math.asin(Math.sin(φ1) * Math.cos(d / R) + Math.cos(φ1) * Math.sin(d / R) * Math.cos(θ));
+      const λ2 = λ1 + Math.atan2(Math.sin(θ) * Math.sin(d / R) * Math.cos(φ1), Math.cos(d / R) - Math.sin(φ1) * Math.sin(φ2));
+      return { lat: φ2 * 180 / Math.PI, lon: λ2 * 180 / Math.PI };
+    }
+    function createEllipse(clat, clon, a, b, brng, n = 80) {
+      const pts = [];
+      for (let i = 0; i < n; i++) {
+        const ang = (i / n) * 2 * Math.PI;
+        const rx = a * Math.cos(ang), ry = b * Math.sin(ang);
+        const dist = Math.sqrt(rx * rx + ry * ry), az = brng + Math.atan2(ry, rx) * 180 / Math.PI;
+        const pt = destination(clat, clon, dist, az);
+        pts.push([pt.lon, pt.lat]);
+      }
+      return pts;
+    }
+
+    function getDamageRadii(q_kt, burstType) {
+      const q = Math.pow(q_kt, 1/3);
+      let scale = 0;
+      if (burstType === 'air') scale = 1.0;
+      else if (burstType === 'ground') scale = 0.8;
+      else if (burstType === 'underground') scale = 0.3;
+
+      return {
+        shockwave: (0.55 * q) * scale,
+        light: burstType === 'underground' ? 0 : (0.7 * q) * scale,
+        radiation: (0.35 * q) * scale,
+        emp: (1.0 * q) * scale
+      };
+    }
+
+    // =============================================
+    // 4. ОТРИСОВКА ЗОН
+    // =============================================
+    function drawZones(lat, lon, q, burstType, windSpeedKmph, bearingDeg) {
+      vectorSource.clear();
+      
+      // Эпицентр
+      vectorSource.addFeature(new ol.Feature({
+        geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])),
+        style: new ol.style.Style({
+          image: new ol.style.Circle({ radius: 8, fill: new ol.style.Fill({ color: 'black' }), stroke: new ol.style.Stroke({ color: 'white', width: 2 }) })
+        })
+      }));
+
+      // ---- Поражающие факторы ----
+      const radii = getDamageRadii(q, burstType);
+      const factors = [
+        { abbr: 'УВ', name: 'Ударная волна', color: 'red', radius: radii.shockwave },
+        { abbr: 'СИ', name: 'Световое излучение', color: 'orange', radius: radii.light },
+        { abbr: 'ПР', name: 'Проникающая радиация', color: 'purple', radius: radii.radiation },
+        { abbr: 'ЭИ', name: 'Электромагнитный импульс', color: 'gray', radius: radii.emp }
+      ];
+
+      factors.sort((a, b) => a.radius - b.radius); 
+      factors.forEach(f => {
+        if (f.radius <= 0) return;
+        const circleFeature = new ol.Feature({
+          geometry: new ol.geom.Circle(ol.proj.fromLonLat([lon, lat]), f.radius * 1000)
+        });
+        circleFeature.set('label', `${f.name}: ${f.radius.toFixed(1)} км`);
+        circleFeature.set('style', new ol.style.Style({
+          fill: new ol.style.Fill({ color: 'rgba(255,255,255,0.01)' }),
+          stroke: new ol.style.Stroke({ color: f.color, width: 2, lineDash: [5, 3] }),
+          zIndex: Math.round(1000 - f.radius)
+        }));
+        vectorSource.addFeature(circleFeature);
+      });
+
+      // ---- Зоны радиоактивного заражения (эллипсы А-Г) ----
+      let K0 = 20, kSh = 0.18;
+      if (burstType === 'air') { K0 = 15; kSh = 0.15; }
+      else if (burstType === 'underground') { K0 = 8; kSh = 0.08; }
+
+      const doses = [
+        { value: 30, color: 'black', abbr: 'Г', name: 'чрезвычайно опасного' },
+        { value: 15, color: '#8B4513', abbr: 'В', name: 'опасного' },
+        { value: 5, color: 'green', abbr: 'Б', name: 'сильного' },
+        { value: 0.5, color: 'blue', abbr: 'А', name: 'умеренного' }
+      ];
+
+      doses.forEach(({ value: D, color, abbr, name }) => {
+        const L = K0 * Math.sqrt(q / windSpeedKmph) * Math.sqrt(0.5 / D);
+        const Wmax = L * kSh;
+        const center = destination(lat, lon, L / 2, bearingDeg);
+        const pts = createEllipse(center.lat, center.lon, L / 2, Wmax / 2, bearingDeg);
+        const poly = new ol.Feature({ geometry: new ol.geom.Polygon([pts.map(p => ol.proj.fromLonLat(p))]) });
+        poly.set('label', `${abbr} – зона ${name}\nУровень радиации: ${D} Р/ч`);
+        poly.set('L', L);
+        poly.set('style', new ol.style.Style({
+          fill: new ol.style.Fill({ color: 'rgba(255,255,255,0.01)' }),
+          stroke: new ol.style.Stroke({ color, width: 2 }),
+          zIndex: Math.round(500 - L)
+        }));
+        vectorSource.addFeature(poly);
+      });
+
+      // Автозум
+      map.getView().fit(vectorSource.getExtent(), { padding: [30, 30, 30, 30], maxZoom: 12 });
+    }
+
+    // =============================================
+    // 5. ЗАПУСК РАСЧЕТА
+    // =============================================
+    function calculateZones() {
+      const [lon, lat] = ol.proj.toLonLat(map.getView().getCenter());
+      const q = +document.getElementById('power').value, burstType = document.getElementById('burstType').value;
+      const windMps = +document.getElementById('windSpeed').value, windDeg = +document.getElementById('windDeg').value;
+      if (isNaN(q) || q <= 0 || isNaN(windMps) || windMps < 0 || isNaN(windDeg)) return alert('Некорректные значения');
+      if (windMps === 0) return alert('Скорость ветра должна быть > 0');
+      drawZones(lat, lon, q, burstType, windMps * 3.6, (windDeg + 180) % 360);
+      document.getElementById('coordsDisplay').textContent = `Эпицентр: ${lat.toFixed(4)}° с.ш., ${lon.toFixed(4)}° в.д.`;
+    }
+
+    map.on('click', e => {
+      const [lon, lat] = ol.proj.toLonLat(e.coordinate);
+      document.getElementById('coordsDisplay').textContent = `Эпицентр: ${lat.toFixed(4)}° с.ш., ${lon.toFixed(4)}° в.д.`;
+      calculateZones();
+    });
+
+    document.getElementById('calcBtn').addEventListener('click', calculateZones);
+    document.getElementById('fetchWindBtn').addEventListener('click', async () => {
+      const [lon, lat] = ol.proj.toLonLat(map.getView().getCenter());
+      try {
+        const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
+        const d = await r.json();
+        document.getElementById('windSpeed').value = d.current_weather.windspeed;
+        document.getElementById('windDeg').value = d.current_weather.winddirection;
+        calculateZones();
+      } catch { alert('⚠️ Ошибка загрузки погоды. Введите данные вручную.'); }
+    });
+
+    calculateZones();
+  </script>
+</body>
+</html>
