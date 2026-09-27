@@ -105,7 +105,10 @@
 
     <div id="stationPicker" class="station-picker" hidden>
         <label for="stationSelect">Действующая АЭС (выберите станцию)</label>
-        <select id="stationSelect" class="station-list" size="6" aria-describedby="stationSourceNote" disabled>
+        <label for="stationSearch">Поиск по названию</label>
+        <input id="stationSearch" type="search" placeholder="Например, Балаковская или Balakovo" autocomplete="off" disabled>
+        <div id="stationSearchStatus" class="note" aria-live="polite">Загрузка списка…</div>
+        <select id="stationSelect" class="station-list" size="6" aria-describedby="stationSearchStatus stationSourceNote" disabled>
             <option value="">Загрузка списка станций…</option>
         </select>
         <div class="note station-source-note" id="stationSourceNote">
@@ -178,10 +181,57 @@
 
     const stationPicker = document.getElementById('stationPicker');
     const stationSelect = document.getElementById('stationSelect');
+    const stationSearch = document.getElementById('stationSearch');
+    const stationSearchStatus = document.getElementById('stationSearchStatus');
     let nuclearStations = [];
 
     function updateStationPicker() {
         stationPicker.hidden = Number(document.getElementById('eventType').value) !== 2;
+    }
+
+    function normalizeStationText(value) {
+        return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
+    }
+
+    function renderStationOptions(query = stationSearch.value) {
+        const normalizedQuery = normalizeStationText(query);
+        const filteredStations = nuclearStations.filter(station => {
+            const searchableText = normalizeStationText(`${station.name} ${station.sourceName} ${station.countryRu} ${station.country}`);
+            return searchableText.includes(normalizedQuery);
+        });
+        const selectedId = stationSelect.value;
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = filteredStations.length ? 'Выберите станцию…' : 'Совпадений не найдено';
+        stationSelect.replaceChildren(placeholder);
+
+        if (!filteredStations.length) {
+            stationSelect.disabled = true;
+            stationSearchStatus.textContent = 'Ничего не найдено. Измените запрос или очистите поле поиска.';
+            return;
+        }
+
+        const groups = new Map();
+        filteredStations.forEach(station => {
+            if (!groups.has(station.countryRu)) groups.set(station.countryRu, []);
+            groups.get(station.countryRu).push(station);
+        });
+        groups.forEach((stations, country) => {
+            const group = document.createElement('optgroup');
+            group.label = country;
+            stations.forEach(station => {
+                const option = document.createElement('option');
+                option.value = station.id;
+                option.textContent = station.name + (station.locationAccuracy && station.locationAccuracy.toLowerCase() !== 'exact' ? ' (примерные координаты)' : '');
+                group.appendChild(option);
+            });
+            stationSelect.appendChild(group);
+        });
+        stationSelect.disabled = false;
+        if (selectedId && filteredStations.some(station => station.id === selectedId)) stationSelect.value = selectedId;
+        stationSearchStatus.textContent = normalizedQuery
+            ? `Совпадений: ${filteredStations.length}.`
+            : `Всего станций: ${nuclearStations.length}.`;
     }
 
     async function loadNuclearStations() {
@@ -190,39 +240,21 @@
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
             nuclearStations = data.stations;
-
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = 'Выберите станцию…';
-            const groups = new Map();
-            nuclearStations.forEach(station => {
-                if (!groups.has(station.countryRu)) groups.set(station.countryRu, []);
-                groups.get(station.countryRu).push(station);
-            });
-
-            stationSelect.replaceChildren(placeholder);
-            groups.forEach((stations, country) => {
-                const group = document.createElement('optgroup');
-                group.label = country;
-                stations.forEach(station => {
-                    const option = document.createElement('option');
-                    option.value = station.id;
-                    option.textContent = station.name + (station.locationAccuracy && station.locationAccuracy.toLowerCase() !== 'exact' ? ' (примерные координаты)' : '');
-                    group.appendChild(option);
-                });
-                stationSelect.appendChild(group);
-            });
-            stationSelect.disabled = nuclearStations.length === 0;
+            stationSearch.disabled = false;
+            renderStationOptions();
         } catch (error) {
             const unavailable = document.createElement('option');
             unavailable.value = '';
             unavailable.textContent = 'Не удалось загрузить список АЭС';
             stationSelect.replaceChildren(unavailable);
             stationSelect.disabled = true;
-            document.getElementById('stationSourceNote').textContent = 'Список не загрузился. Можно выбрать эпицентр кликом по карте.';
+            stationSearch.disabled = true;
+            stationSearchStatus.textContent = 'Список не загрузился. Можно выбрать эпицентр кликом по карте.';
             console.error('Не удалось загрузить каталог АЭС:', error);
         }
     }
+
+    stationSearch.addEventListener('input', () => renderStationOptions(stationSearch.value));
 
     // =============================================
     // 2. ТУЛТИП

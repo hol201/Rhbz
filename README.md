@@ -5,6 +5,7 @@
 ## Каталог атомных электростанций
 
 `nuclear-plants.json` содержит по одной записи на площадку, где в исходном наборе есть хотя бы один энергоблок со статусом `operating`. В файле указаны координаты, страна, число действующих по источнику блоков и точность координат. Российские станции подписаны по-русски; остальные сгруппированы по стране.
+В интерфейсе список можно фильтровать по названию станции на русском или по исходному названию из набора данных; фильтр обновляет результаты сразу, не отправляя запросы на сервер.
 
 - **Источник данных:** [Global Nuclear Power Tracker, Global Energy Monitor](https://globalenergymonitor.org/projects/global-nuclear-power-tracker/), через [KAPSARC Data Portal](https://datasource.kapsarc.org/explore/assets/global-nuclear-power-tracker/).
 - **Снимок источника:** 11 мая 2026 года; лицензия набора на портале — [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
