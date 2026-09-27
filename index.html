@@ -9,6 +9,23 @@
         body { margin: 0; padding: 0; font-family: Arial, sans-serif; background: #333; }
         #map { position: absolute; top: 0; bottom: 0; left: 0; right: 0; }
 
+        .map-toolbar {
+            position: absolute; top: 12px; left: 12px; display: flex; gap: 8px;
+            z-index: 1200;
+        }
+        .map-toolbar button {
+            min-height: 44px; padding: 0 14px; border: 0; border-radius: 10px;
+            background: #fff; color: #222; box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+            cursor: pointer; font-size: 14px; font-weight: bold; touch-action: manipulation;
+        }
+        .map-toolbar button:hover { background: #eef4ff; }
+        .map-toolbar button:focus-visible, .control-panel button:focus-visible {
+            outline: 3px solid #1b5bbf; outline-offset: 2px;
+        }
+        .map-toolbar button:disabled { cursor: wait; opacity: 0.7; }
+        .ol-zoom { top: 12px; right: 12px; left: auto; }
+        .control-panel[hidden] { display: none !important; }
+
         .control-panel {
             position: absolute; background: rgba(255,255,255,0.95); padding: 12px 15px;
             border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.4); z-index: 1000;
@@ -17,25 +34,27 @@
         }
 
         @media (min-width: 769px) {
-            .control-panel { top: 15px; left: 15px; right: auto; bottom: auto; max-height: 85vh; overflow-y: auto; }
+            .control-panel { top: 66px; left: 12px; right: auto; bottom: auto; max-height: calc(100vh - 78px); max-height: calc(100dvh - 78px); overflow-y: auto; }
         }
 
         @media (max-width: 768px) {
             .control-panel {
-                bottom: 0; left: 0; right: 0; top: auto;
-                width: 100%; max-width: 100%;
-                border-radius: 12px 12px 0 0;
-                max-height: 45vh;
+                top: 66px; bottom: auto; left: 12px; right: 12px;
+                width: auto; max-width: 360px;
+                border-radius: 12px;
+                max-height: calc(100vh - 78px); max-height: calc(100dvh - 78px);
                 overflow-y: auto;
                 background: rgba(255,255,255,0.97);
                 padding: 12px;
-                border-top: 3px solid #2a7ae2;
+                border: 2px solid #2a7ae2;
             }
             .control-panel h3 { font-size: 14px; margin-top: 0; }
             .control-panel label { font-size: 12px; }
             .control-panel input, .control-panel select { height: 40px; font-size: 16px; margin-bottom: 6px; }
             .control-panel button { height: 44px; font-size: 14px; }
             .coords-display { font-size: 12px; }
+            .map-toolbar { top: 10px; left: 10px; }
+            .map-toolbar button { min-height: 44px; font-size: 13px; padding: 0 11px; }
         }
 
         .control-panel h3 { margin: 0 0 8px; }
@@ -64,7 +83,14 @@
 <div id="map"></div>
 <div id="zoneTooltip" class="zone-tooltip" style="display: none;"></div>
 
-<div class="control-panel">
+<div class="map-toolbar" role="toolbar" aria-label="Управление картой">
+    <button type="button" id="menuToggle" aria-label="Открыть меню" aria-controls="controlPanel" aria-expanded="false" title="Открыть меню">
+        <span id="menuIcon" aria-hidden="true">☰</span>
+    </button>
+    <button type="button" id="locateBtn" title="Определить моё местоположение">◎ Моё местоположение</button>
+</div>
+
+<div class="control-panel" id="controlPanel" hidden>
     <h3>💥 Параметры</h3>
     <div class="coords-display" id="coordsDisplay">Эпицентр: ...</div>
 
@@ -111,6 +137,9 @@
     // =============================================
     // 1. КАРТА И СЛОИ
     // =============================================
+    const initialCenter = [37.618423, 55.751244];
+    let epicenter = initialCenter.slice();
+
     const tileLayer = new ol.layer.Tile({
         source: new ol.source.OSM()
     });
@@ -118,7 +147,7 @@
     const map = new ol.Map({
         target: 'map',
         layers: [tileLayer],
-        view: new ol.View({ center: ol.proj.fromLonLat([37.618423, 55.751244]), zoom: 7 })
+        view: new ol.View({ center: ol.proj.fromLonLat(initialCenter), zoom: 7 })
     });
 
     const vectorSource = new ol.source.Vector();
@@ -127,6 +156,11 @@
         style: f => f.get('style')
     });
     map.addLayer(vectorLayer);
+
+    function updateCoordinatesDisplay() {
+        const [lon, lat] = epicenter;
+        document.getElementById('coordsDisplay').textContent = `Эпицентр: ${lat.toFixed(4)}° с.ш., ${lon.toFixed(4)}° в.д.`;
+    }
 
     // =============================================
     // 2. ТУЛТИП
@@ -318,24 +352,64 @@
     // 5. ЗАПУСК РАСЧЁТА
     // =============================================
     function calculateZones() {
-        const [lon, lat] = ol.proj.toLonLat(map.getView().getCenter());
+        const [lon, lat] = epicenter;
         const power = +document.getElementById('power').value;
         const eventType = +document.getElementById('eventType').value;
         const windMps = +document.getElementById('windSpeed').value;
         const windDeg = +document.getElementById('windDeg').value;
         const timeHours = parseFloat(document.getElementById('timeSelect').value);
 
-        if (isNaN(power) || power <= 0 || isNaN(windMps) || windMps < 0 || isNaN(windDeg)) return alert('Некорректные значения');
-        if (windMps === 0) return alert('Скорость ветра должна быть > 0');
+        updateCoordinatesDisplay();
+        if (!Number.isFinite(power) || power <= 0 || !Number.isFinite(windMps) || !Number.isFinite(windDeg) || windDeg < 0 || windDeg > 360) return alert('Проверьте введённые значения');
+        if (windMps <= 0) return alert('Скорость ветра должна быть больше 0');
 
         drawZones(lat, lon, power, eventType, windMps * 3.6, (windDeg + 180) % 360, timeHours);
-        document.getElementById('coordsDisplay').textContent = `Эпицентр: ${lat.toFixed(4)}° с.ш., ${lon.toFixed(4)}° в.д.`;
     }
 
     map.on('click', e => {
-        const [lon, lat] = ol.proj.toLonLat(e.coordinate);
-        document.getElementById('coordsDisplay').textContent = `Эпицентр: ${lat.toFixed(4)}° с.ш., ${lon.toFixed(4)}° в.д.`;
+        epicenter = ol.proj.toLonLat(e.coordinate);
         calculateZones();
+    });
+
+    const menuToggle = document.getElementById('menuToggle');
+    const controlPanel = document.getElementById('controlPanel');
+    const menuIcon = document.getElementById('menuIcon');
+    menuToggle.addEventListener('click', () => {
+        const expanded = menuToggle.getAttribute('aria-expanded') === 'true';
+        controlPanel.hidden = expanded;
+        menuToggle.setAttribute('aria-expanded', String(!expanded));
+        menuToggle.setAttribute('aria-label', expanded ? 'Открыть меню' : 'Свернуть меню');
+        menuToggle.title = expanded ? 'Открыть меню' : 'Свернуть меню';
+        menuIcon.textContent = expanded ? '☰' : '×';
+    });
+
+    const locateBtn = document.getElementById('locateBtn');
+    locateBtn.addEventListener('click', () => {
+        if (!navigator.geolocation) {
+            alert('Этот браузер не поддерживает определение местоположения.');
+            return;
+        }
+
+        locateBtn.disabled = true;
+        locateBtn.textContent = 'Определяем…';
+        navigator.geolocation.getCurrentPosition(position => {
+            epicenter = [position.coords.longitude, position.coords.latitude];
+            map.getView().setCenter(ol.proj.fromLonLat(epicenter));
+            map.getView().setZoom(11);
+            updateCoordinatesDisplay();
+            locateBtn.disabled = false;
+            locateBtn.textContent = '◎ Моё местоположение';
+            calculateZones();
+        }, error => {
+            const messages = {
+                1: 'Доступ к местоположению запрещён. Разрешите его в настройках браузера.',
+                2: 'Не удалось определить местоположение. Попробуйте ещё раз.',
+                3: 'Определение местоположения заняло слишком много времени. Попробуйте ещё раз.'
+            };
+            locateBtn.disabled = false;
+            locateBtn.textContent = '◎ Моё местоположение';
+            alert(messages[error.code] || 'Не удалось определить местоположение.');
+        }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
     });
 
     document.getElementById('calcBtn').addEventListener('click', calculateZones);
@@ -343,7 +417,7 @@
     document.getElementById('timeSelect').addEventListener('change', calculateZones);
 
     document.getElementById('fetchWindBtn').addEventListener('click', async () => {
-        const [lon, lat] = ol.proj.toLonLat(map.getView().getCenter());
+        const [lon, lat] = epicenter;
         try {
             const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
             const d = await r.json();
