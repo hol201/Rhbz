@@ -65,7 +65,13 @@
         .note { font-size: 10px; color: #555; margin-top: 8px; }
         .coords-display { font-size: 12px; background: #f5f5f5; padding: 6px; border-radius: 6px; text-align: center; margin: 5px 0; font-weight: bold; }
         .station-picker[hidden] { display: none !important; }
-        .control-panel .station-list { height: 170px; min-height: 170px; overflow-y: auto; padding: 4px; font-size: 14px; }
+        .station-step[hidden], .station-choice-list[hidden] { display: none !important; }
+        .station-choice-list { max-height: 210px; overflow-y: auto; border: 1px solid #c8cdd4; border-radius: 7px; background: #fff; margin: 4px 0 8px; overscroll-behavior: contain; }
+        .control-panel .picker-toggle { text-align: left; min-height: 44px; }
+        .control-panel .station-choice-list button { display: block; width: 100%; min-height: 42px; margin: 0; padding: 9px 11px; border: 0; border-bottom: 1px solid #e5e7eb; border-radius: 0; background: #fff; color: #222; text-align: left; font-size: 14px; }
+        .control-panel .station-choice-list button:last-child { border-bottom: 0; }
+        .control-panel .station-choice-list button:hover { background: #eef4ff; }
+        .control-panel .station-choice-list button[aria-pressed="true"] { background: #eaf2ff; color: #1b5bbf; }
         .station-source-note { line-height: 1.4; }
 
         .zone-tooltip {
@@ -104,15 +110,20 @@
     </select>
 
     <div id="stationPicker" class="station-picker" hidden>
-        <label for="stationSelect">Действующая АЭС (выберите станцию)</label>
-        <label for="stationSearch">Поиск по названию</label>
-        <input id="stationSearch" type="search" placeholder="Например, Балаковская или Balakovo" autocomplete="off" disabled>
-        <div id="stationSearchStatus" class="note" aria-live="polite">Загрузка списка…</div>
-        <select id="stationSelect" class="station-list" size="6" aria-describedby="stationSearchStatus stationSourceNote" disabled>
-            <option value="">Загрузка списка станций…</option>
-        </select>
+        <label for="countryToggle">Страна</label>
+        <button type="button" id="countryToggle" class="picker-toggle" aria-controls="countryList" aria-expanded="false" disabled>Загрузка списка стран…</button>
+        <div id="countryList" class="station-choice-list" role="group" aria-label="Выберите страну" hidden></div>
+
+        <div id="stationStep" class="station-step" hidden>
+            <label for="stationSearch">АЭС в выбранной стране</label>
+            <input id="stationSearch" type="search" placeholder="Поиск по названию — например, Балаковская" autocomplete="off" disabled aria-describedby="stationSearchStatus">
+            <div id="stationSearchStatus" class="note" aria-live="polite">Сначала выберите страну.</div>
+            <button type="button" id="stationToggle" class="picker-toggle" aria-controls="stationList" aria-expanded="false" disabled>Выбрать АЭС</button>
+            <div id="stationList" class="station-choice-list" role="group" aria-label="Список атомных электростанций" hidden></div>
+        </div>
+
         <div class="note station-source-note" id="stationSourceNote">
-            Список сгруппирован по странам. Можно также выбрать точку кликом по карте.
+            Сначала выберите страну, затем АЭС; клик по карте также задаёт эпицентр.
             Источник данных: <a href="https://globalenergymonitor.org/projects/global-nuclear-power-tracker" target="_blank" rel="noopener noreferrer">Global Energy Monitor (GEM), Global Nuclear Power Tracker</a>; данные через <a href="https://datasource.kapsarc.org/explore/assets/global-nuclear-power-tracker/" target="_blank" rel="noopener noreferrer">KAPSARC Data Portal</a>, лицензия <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>. Снимок от 11.05.2026; статусы могут обновляться с задержкой.
         </div>
     </div>
@@ -180,10 +191,17 @@
     }
 
     const stationPicker = document.getElementById('stationPicker');
-    const stationSelect = document.getElementById('stationSelect');
+    const countryToggle = document.getElementById('countryToggle');
+    const countryList = document.getElementById('countryList');
+    const stationStep = document.getElementById('stationStep');
+    const stationToggle = document.getElementById('stationToggle');
+    const stationList = document.getElementById('stationList');
     const stationSearch = document.getElementById('stationSearch');
     const stationSearchStatus = document.getElementById('stationSearchStatus');
     let nuclearStations = [];
+    let countryGroups = [];
+    let selectedCountry = '';
+    let selectedStationId = '';
 
     function updateStationPicker() {
         stationPicker.hidden = Number(document.getElementById('eventType').value) !== 2;
@@ -193,45 +211,85 @@
         return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
     }
 
-    function renderStationOptions(query = stationSearch.value) {
+    function stationsInSelectedCountry() {
+        return nuclearStations.filter(station => station.countryRu === selectedCountry);
+    }
+
+    function updatePickerButtons() {
+        countryToggle.textContent = selectedCountry ? `${selectedCountry} — изменить` : 'Выбрать страну';
+        const selectedStation = nuclearStations.find(station => station.id === selectedStationId);
+        stationToggle.textContent = selectedStation
+            ? `${selectedStation.name} — изменить`
+            : (selectedCountry ? (stationList.hidden ? 'Показать список АЭС' : 'Скрыть список АЭС') : 'Сначала выберите страну');
+        stationToggle.disabled = !selectedCountry || !nuclearStations.length;
+    }
+
+    function renderCountryButtons() {
+        countryList.replaceChildren();
+        countryGroups.forEach(group => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = `${group.country} (${group.stations.length})`;
+            button.setAttribute('aria-pressed', String(group.country === selectedCountry));
+            button.addEventListener('click', () => selectCountry(group.country));
+            countryList.appendChild(button);
+        });
+    }
+
+    function selectCountry(country) {
+        if (country !== selectedCountry) selectedStationId = '';
+        selectedCountry = country;
+        stationSearch.value = '';
+        stationStep.hidden = false;
+        stationList.hidden = false;
+        stationToggle.setAttribute('aria-expanded', 'true');
+        countryList.hidden = true;
+        countryToggle.setAttribute('aria-expanded', 'false');
+        stationSearchStatus.textContent = `Всего станций в стране: ${stationsInSelectedCountry().length}.`;
+        updatePickerButtons();
+        renderCountryButtons();
+        renderStationButtons();
+    }
+
+    function renderStationButtons(query = stationSearch.value) {
+        const stations = stationsInSelectedCountry();
         const normalizedQuery = normalizeStationText(query);
-        const filteredStations = nuclearStations.filter(station => {
-            const searchableText = normalizeStationText(`${station.name} ${station.sourceName} ${station.countryRu} ${station.country}`);
+        const filteredStations = stations.filter(station => {
+            const searchableText = normalizeStationText(`${station.name} ${station.sourceName}`);
             return searchableText.includes(normalizedQuery);
         });
-        const selectedId = stationSelect.value;
-        const placeholder = document.createElement('option');
-        placeholder.value = '';
-        placeholder.textContent = filteredStations.length ? 'Выберите станцию…' : 'Совпадений не найдено';
-        stationSelect.replaceChildren(placeholder);
-
-        if (!filteredStations.length) {
-            stationSelect.disabled = true;
-            stationSearchStatus.textContent = 'Ничего не найдено. Измените запрос или очистите поле поиска.';
-            return;
-        }
-
-        const groups = new Map();
+        stationList.replaceChildren();
         filteredStations.forEach(station => {
-            if (!groups.has(station.countryRu)) groups.set(station.countryRu, []);
-            groups.get(station.countryRu).push(station);
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = station.name + (station.locationAccuracy && station.locationAccuracy.toLowerCase() !== 'exact' ? ' (примерные координаты)' : '');
+            button.setAttribute('aria-pressed', String(station.id === selectedStationId));
+            button.addEventListener('click', () => selectStation(station));
+            stationList.appendChild(button);
         });
-        groups.forEach((stations, country) => {
-            const group = document.createElement('optgroup');
-            group.label = country;
-            stations.forEach(station => {
-                const option = document.createElement('option');
-                option.value = station.id;
-                option.textContent = station.name + (station.locationAccuracy && station.locationAccuracy.toLowerCase() !== 'exact' ? ' (примерные координаты)' : '');
-                group.appendChild(option);
-            });
-            stationSelect.appendChild(group);
-        });
-        stationSelect.disabled = false;
-        if (selectedId && filteredStations.some(station => station.id === selectedId)) stationSelect.value = selectedId;
-        stationSearchStatus.textContent = normalizedQuery
-            ? `Совпадений: ${filteredStations.length}.`
-            : `Всего станций: ${nuclearStations.length}.`;
+
+        stationSearchStatus.textContent = filteredStations.length
+            ? (normalizedQuery ? `Совпадений: ${filteredStations.length} из ${stations.length}.` : `Всего станций в стране: ${stations.length}.`)
+            : 'Ничего не найдено. Измените запрос или очистите поле поиска.';
+        return filteredStations.length;
+    }
+
+    function selectStation(station) {
+        selectedStationId = station.id;
+        stationList.hidden = true;
+        stationToggle.setAttribute('aria-expanded', 'false');
+        updatePickerButtons();
+        epicenter = [station.longitude, station.latitude];
+        map.getView().setCenter(ol.proj.fromLonLat(epicenter));
+        map.getView().setZoom(10);
+        calculateZones();
+    }
+
+    function clearSelectedStation() {
+        selectedStationId = '';
+        stationList.hidden = true;
+        stationToggle.setAttribute('aria-expanded', 'false');
+        updatePickerButtons();
     }
 
     async function loadNuclearStations() {
@@ -240,21 +298,53 @@
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
             nuclearStations = data.stations;
+            const groups = new Map();
+            nuclearStations.forEach(station => {
+                if (!groups.has(station.countryRu)) groups.set(station.countryRu, []);
+                groups.get(station.countryRu).push(station);
+            });
+            countryGroups = Array.from(groups, ([country, stations]) => ({ country, stations }));
+            countryToggle.disabled = false;
             stationSearch.disabled = false;
-            renderStationOptions();
+            renderCountryButtons();
+            updatePickerButtons();
         } catch (error) {
-            const unavailable = document.createElement('option');
-            unavailable.value = '';
-            unavailable.textContent = 'Не удалось загрузить список АЭС';
-            stationSelect.replaceChildren(unavailable);
-            stationSelect.disabled = true;
+            countryToggle.disabled = true;
             stationSearch.disabled = true;
+            stationToggle.disabled = true;
             stationSearchStatus.textContent = 'Список не загрузился. Можно выбрать эпицентр кликом по карте.';
             console.error('Не удалось загрузить каталог АЭС:', error);
         }
     }
 
-    stationSearch.addEventListener('input', () => renderStationOptions(stationSearch.value));
+    countryToggle.addEventListener('click', () => {
+        const opening = countryList.hidden;
+        countryList.hidden = !opening;
+        countryToggle.setAttribute('aria-expanded', String(opening));
+        if (opening) {
+            stationList.hidden = true;
+            stationToggle.setAttribute('aria-expanded', 'false');
+            updatePickerButtons();
+        }
+    });
+
+    stationToggle.addEventListener('click', () => {
+        const opening = stationList.hidden;
+        if (opening) renderStationButtons();
+        const hasResults = stationList.children.length > 0;
+        stationList.hidden = !(opening && hasResults);
+        stationToggle.setAttribute('aria-expanded', String(!stationList.hidden));
+        updatePickerButtons();
+    });
+
+    stationSearch.addEventListener('input', () => {
+        const resultCount = renderStationButtons(stationSearch.value);
+        if (stationSearch.value.trim()) {
+            stationList.hidden = resultCount === 0;
+            stationToggle.setAttribute('aria-expanded', String(resultCount > 0));
+            updatePickerButtons();
+        }
+    });
 
     // =============================================
     // 2. ТУЛТИП
@@ -462,7 +552,7 @@
 
     map.on('click', e => {
         epicenter = ol.proj.toLonLat(e.coordinate);
-        stationSelect.value = '';
+        clearSelectedStation();
         calculateZones();
     });
 
@@ -489,7 +579,7 @@
         locateBtn.textContent = 'Определяем…';
         navigator.geolocation.getCurrentPosition(position => {
             epicenter = [position.coords.longitude, position.coords.latitude];
-            stationSelect.value = '';
+            clearSelectedStation();
             map.getView().setCenter(ol.proj.fromLonLat(epicenter));
             map.getView().setZoom(11);
             updateCoordinatesDisplay();
@@ -511,14 +601,6 @@
     document.getElementById('calcBtn').addEventListener('click', calculateZones);
     document.getElementById('eventType').addEventListener('change', () => {
         updateStationPicker();
-        calculateZones();
-    });
-    stationSelect.addEventListener('change', () => {
-        const station = nuclearStations.find(item => item.id === stationSelect.value);
-        if (!station) return;
-        epicenter = [station.longitude, station.latitude];
-        map.getView().setCenter(ol.proj.fromLonLat(epicenter));
-        map.getView().setZoom(10);
         calculateZones();
     });
     document.getElementById('timeSelect').addEventListener('change', calculateZones);
